@@ -15,7 +15,7 @@ import qwen_utils
 from document_loader import load_and_split_directory
 
 # 打开debug模式
-set_debug(True)
+# set_debug(True)
 
 # ==========================================
 # 第一部分：全局初始化 (整个服务器生命周期只执行一次)
@@ -80,9 +80,8 @@ def create_hybrid_rerank_retriever():
     # top_n=3 表示经过精细打分后，只保留最最相关的前 3 个文档块给大模型
     dashscope_api_key = os.getenv("DASHSCOPE_API_KEY")
     compressor = DashScopeRerank(
-        api_key=dashscope_api_key,
-        top_n=3,
-        model="qwen3-vl-rerank"
+        model="qwen3-vl-rerank",
+        top_n=3
     )
 
     # 步骤 C：使用 ContextualCompressionRetriever 包装合并后的检索器
@@ -93,6 +92,46 @@ def create_hybrid_rerank_retriever():
     )
 
     return compression_retriever
+
+
+def create_ultimate_retriever():
+    """
+    终极检索策略：
+    1. Multi-Query: 扩展问题维度
+    2. Hybrid Search: 向量(FAISS) + 关键词(BM25) 双路召回
+    3. Rerank: 阿里 DashScope 重排模型精选 Top 3
+    """
+
+    # --- 步骤 1: 构建基础的混合检索器 (Hybrid) ---
+    # 同时从语义和关键字两个维度捞数据
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, vector_retriever],
+        weights=[0.4, 0.6]  # 向量检索通常权重略高
+    )
+
+    # --- 步骤 2: 在混合检索之上叠加 Multi-Query ---
+    # 让 LLM 生成多个衍生问题，每个问题都去跑一遍 Hybrid 检索
+    # 这极大地提高了召回率，防止用户提问太模糊
+    mq_hybrid_retriever = MultiQueryRetriever.from_llm(
+        retriever=ensemble_retriever,
+        llm=llm
+    )
+
+    # --- 步骤 3: 接入 Rerank 重排过滤器 ---
+    # 前面捞回来的文档可能非常多（Multi-Query 会导致倍增）
+    # 使用 Rerank 模型强力打分，只留下最精华的 3 个
+    compressor = DashScopeRerank(
+        model="qwen-reranker",  # 请确保模型名正确
+        top_n=3
+    )
+
+    # 使用压缩器包装前面的复杂检索链
+    ultimate_compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor,
+        base_retriever=mq_hybrid_retriever
+    )
+
+    return ultimate_compression_retriever
 
 
 def format_docs(docs):
@@ -113,6 +152,8 @@ async def process_question(question: str, strategy: str = "naive") -> str:
         current_retriever = create_hyde_retriever(llm, vector_retriever)
     elif strategy == "hybrid":
         current_retriever = create_hybrid_rerank_retriever()
+    elif strategy == "ultimate":
+        current_retriever = create_ultimate_retriever()
     else:
         current_retriever = vector_retriever
 
