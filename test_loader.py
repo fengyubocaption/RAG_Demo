@@ -2,7 +2,7 @@
 from document_loader import load_and_split_document
 
 # 可以是 .md, .txt, 或者 .pdf
-test_file = "sample.md"
+test_file = "file/sample.md"
 
 try:
     # 调用刚才写好的加载与切分逻辑
