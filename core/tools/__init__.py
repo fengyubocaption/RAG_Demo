@@ -5,7 +5,6 @@ from .rag_tool import search_local_files
 from .web_tool import web_search
 from .weather_tool import get_weather_advanced
 from .api_tool import fetch_external_user_profile
-from .sql_tool import execute_sql_query
 
 # 2. 打包成一个总的工具箱列表
 AGENT_TOOLS = [
@@ -13,5 +12,4 @@ AGENT_TOOLS = [
     web_search,
     get_weather_advanced,
     fetch_external_user_profile,
-    # execute_sql_query
 ]
