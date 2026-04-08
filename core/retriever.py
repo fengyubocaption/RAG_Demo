@@ -1,5 +1,7 @@
 # core/retriever.py
 import jieba
+import os
+import pickle
 from langchain_community.vectorstores import Milvus
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import MultiQueryRetriever, ContextualCompressionRetriever, EnsembleRetriever
@@ -14,10 +16,37 @@ from .document_loader import load_and_split_path
 # ==========================================
 # 全局初始化：秒级启动架构
 # ==========================================
-print(">>> [检索层] 正在连接持久化向量库与初始化内存词表...")
+BM25_CACHE_PATH = os.path.join(settings.DATA_DIR, "bm25_cache.pkl")
 
-# 1. 快速加载本地文本 (仅用于喂给纯内存的 BM25，纯本地 I/O 不费 Token)
-split_docs = load_and_split_path(settings.DATA_DIR)
+print(">>> [检索层] 正在初始化 BM25 内存词表...")
+
+if os.path.exists(BM25_CACHE_PATH):
+    print(">>> [检索层] 发现 BM25 硬盘缓存，正在执行【秒级反序列化加载】...")
+    with open(BM25_CACHE_PATH, "rb") as f:
+        # 只读取剥离出来的纯数据字典
+        cache_data = pickle.load(f)
+
+        # 用纯数据重新组装一个干净的、带新锁的 Retriever 对象！
+        bm25_retriever = BM25Retriever(
+            docs=cache_data["docs"],
+            vectorizer=cache_data["vectorizer"],
+            preprocess_func=jieba.lcut
+        )
+        bm25_retriever.k = 6
+else:
+    print(">>> [检索层] 未发现缓存，需读取全量文件构建词表 (仅需一次)...")
+    split_docs = load_and_split_path(settings.FILE_DIR)
+    bm25_retriever = BM25Retriever.from_documents(split_docs, preprocess_func=jieba.lcut)
+    bm25_retriever.k = 6
+
+    # 【核心解法】只抽取它核心的文档和算法模型，避开 LangChain 外壳的线程锁！
+    cache_data = {
+        "docs": bm25_retriever.docs,
+        "vectorizer": bm25_retriever.vectorizer
+    }
+    with open(BM25_CACHE_PATH, "wb") as f:
+        pickle.dump(cache_data, f)
+    print(">>> [检索层] BM25 纯数据缓存已生成！")
 
 # 2. 核心改变：直接实例化连接现有的 Milvus 数据库，而不是每次重建！
 embeddings = DashScopeEmbeddings(model="text-embedding-v2")
@@ -29,9 +58,6 @@ vectorstore = Milvus(
 )
 vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
 
-# 3. 初始化内存级 BM25
-bm25_retriever = BM25Retriever.from_documents(split_docs, preprocess_func=jieba.lcut)
-bm25_retriever.k = 6
 print(">>> [检索层] 基础双路检索器就绪！(Milvus 直连成功)")
 
 # ==========================================
